@@ -26,6 +26,14 @@ contract Items is Ownable {
         symbol = _symbol;
     }
 
+    function changeName(string memory _name) external onlyOwner {
+        name = _name;
+    }
+
+    function changeSymbol(string memory _symbol) external onlyOwner {
+        symbol = _symbol;
+    }
+
     function addItem(
         string memory _name,
         string memory _description,
