@@ -18,6 +18,8 @@ contract Items is Ownable {
     string public symbol;
 
     mapping(uint256 => Item) public itemIdToItem;
+    mapping(uint256 => address) public itemIdToOwner;
+    mapping(address => uint256[]) public ownerToItemCount;
 
     Counters.Counter private tokenIdCounter;
 

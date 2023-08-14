@@ -1,102 +1,162 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.18;
+pragma solidity ^0.8.18;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
-import "@openzeppelin/contracts/finance/PaymentSplitter.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Collectible721 is ERC721, ERC721Burnable, Ownable, PaymentSplitter {
+/**
+A collectible can be a single item or a collection of items. Each one with is different price
+ */
+
+contract Collectible721 is ERC721, ERC721URIStorage, Ownable {
     using Counters for Counters.Counter;
 
     Counters.Counter private tokenIdCounter;
 
-    string public collectibleName;
-    string public collectibleSymbol;
+    string public baseUri;
+    uint256 public supply;
+    // lockedUntil = 0 leaves the contract opened to transactions
+    // a non zero value means it's locked after the time specified by the timestamp
+    uint256 public mintPrice;
+    uint256 public preMintPrice;
+    address[] private allowList;
+    uint256 public maxPremintWallets;
+    uint256 public maxPremintCollectibles;
+    uint256 public preMintEndDate;
+    uint256 public publicMintStartDate;
     mapping(uint256 => address) public tokenIdToOwner;
-    uint256 public collectiblePrice;
-    // When the NFT owner address is different than the deployer one
-    // then each time the collectible is sell the original creator
-    // gets rewarded with a % of the transfered ETH
-    address public creatorEarningsAddress;
-    uint256 public creatorEarningsPercent;
+    mapping(address => uint256[]) public ownerToTokenIds;
 
-    // A hidden collectible will not display the real collectible image
-    bool public isHidden;
-    string public hiddenCover;
+    event PreMinted(address minter, uint256 itemId);
 
     constructor(
-        string memory _collectibleName,
-        string memory _collectibleSymbol,
-        uint256 _collectiblePrice,
-        address memory _creatorEarningsAddress,
-        uint256 _creatorEarningsPercent,
-        bool _isHidden,
-        string _hiddenCover,
-    ) ERC721(_collectibleName, _collectibleSymbol) {
-        collectibleName = _collectibleName;
-        collectibleSymbol = _collectibleSymbol;
-        collectiblePrice = _collectiblePrice;
+        string memory _name,
+        string memory _symbol,
+        uint256 _mintPrice,
+        uint256 _preMintPrice,
+        uint256 _maxPremintWallets,
+        uint256 _maxPremintCollectibles,
+        uint256 _preMintEndDate,
+        uint256 _publicMintStartDate
+    ) ERC721(_name, _symbol) {
+        require(
+            _publicMintStartDate >= 0,
+            "You must set a public mint date for the collectibles to be sold"
+        );
 
-        require(_creatorEarningsPercent >= 0 && _creatorEarningsPercent <= 10, "The original owner's NFT earning percentage must be a value between 0 and 10");
-        
-        creatorEarningsAddress = _creatorEarningsAddress;
-        creatorEarningsPercent = _creatorEarningsPercent;
+        publicMintStartDate = _publicMintStartDate;
 
-        isHidden = _isHidden;
+        if (_mintPrice > 0) {
+            mintPrice = _mintPrice;
+        }
 
-        hiddenCover = _hiddenCover;
+        if (_preMintPrice > 0) {
+            preMintPrice = _preMintPrice;
+        }
 
-        // The payment shares are set once at the contract deployment event
-        // and the release() function must be called manually to transfer the holded ether
-        if (_creatorEarningsAddress.length && _creatorEarningsPercent > 0) {
-            PaymentSplitter([_creatorEarningsAddress], [_creatorEarningsPercent]);
+        if (_maxPremintWallets > 0) {
+            maxPremintWallets = _maxPremintWallets;
+        }
+
+        if (_maxPremintCollectibles > 0) {
+            maxPremintCollectibles = _maxPremintCollectibles;
+        }
+
+        if (_preMintEndDate > 0) {
+            preMintEndDate = _preMintEndDate;
         }
     }
 
-    function safeMint(address to) public OnlyOwner {
-        // The amount of eth the sender sent must be gte than the collectible price
-        require(msg.value >= collectiblePrice, "Insuficient balance");
+    // Users are added into a whitelist to mint the items before the public:w
+
+    function premint(
+        string memory tokenUri
+    ) external payable returns (uint256) {
+        uint256 tokenId = tokenIdCounter.current();
+
+        require(
+            tokenId < maxPremintCollectibles,
+            "The pre-mint items are sold out"
+        );
+
+        require(block.timestamp <= preMintEndDate, "The pre-mint sale is over");
+
+        require(msg.value >= preMintPrice, "Not enough funds");
+
+        // Get the available token Ids owned by the caller
+        uint256[] memory tokensByOwner = ownerToTokenIds[msg.sender];
+
+        require(
+            tokensByOwner.length < maxPremintCollectibles,
+            "Maximum collectibles pre-minted by wallet"
+        );
+
+        // Push the token to the caller's array of ids
+        ownerToTokenIds[msg.sender].push(tokenId);
+
+        // Associate the tokenId to the caller
+        tokenIdToOwner[tokenId] = msg.sender;
+
+        emit PreMinted(msg.sender, tokenId);
+
+        // Decrement the collectible's supply
+        supply -= 1;
 
         tokenIdCounter.increment();
-        uint256 _tokenId = tokenIdCounter.current();
 
-        // Associate the tokenId with the buyer
-        tokenIdToOwner[msg.sender] = _tokenId;
+        // Mint the token and then set the token URI image
+        _safeMint(msg.sender, tokenId);
+        _setTokenURI(tokenId, tokenUri);
 
-        // Add the creator earnings if the current owner is not the smart contract deployer
-        // if (owner.)
-
-        _safeMint(to, _tokenId);
+        return tokenId;
     }
 
-    // Mark the contract as hidden/not-hidden
-    function setIsHidden(bool _isHidden) public onlyOwner {
-        isHidden = _isHidden;
+    function mint(string memory tokenUri) external payable returns (uint256) {
+        uint256 tokenId = tokenIdCounter.current();
 
-        // TODO: Modify the collectible URI if it's hidden (show a default cover or a user defined one)
+        // Users can mint after the public mint date
+        require(
+            block.timestamp >= publicMintStartDate,
+            "The collectibles are not available at public sale for now"
+        );
+
+        require(tokenId < supply, "No more collectibles to mint");
+
+        require(msg.value >= mintPrice, "Not enought funds");
+
+        tokenIdCounter.increment();
+
+        tokenId = tokenIdCounter.current();
+
+        tokenIdToOwner[tokenId] = msg.sender;
+
+        ownerToTokenIds[msg.sender].push(tokenId);
+
+        _safeMint(msg.sender, tokenId);
+        _setTokenURI(tokenId, tokenUri);
+
+        return tokenId;
     }
 
-    // Override functions required by solidity
+    // Function overrides
 
     function _burn(
-        uint256 _tokenId
+        uint256 tokenId
     ) internal override(ERC721, ERC721URIStorage) {
-        super._burn(_tokenId);
+        super._burn(tokenId);
     }
 
     function tokenURI(
-        uint256 _tokenId
+        uint256 tokenId
     ) public view override(ERC721, ERC721URIStorage) returns (string memory) {
-        return super.tokenURI(_tokenId);
+        return super.tokenURI(tokenId);
     }
 
-    // Check for the additional interface ID that will be supported
     function supportsInterface(
-        bytes4 _interfaceId
-    ) public view virtual override(ERC721, ERC721URIStorage) returns (bool) {
-        return super.supportsInterface(_interfaceId);
+        bytes4 interfaceId
+    ) public view override(ERC721, ERC721URIStorage) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }
