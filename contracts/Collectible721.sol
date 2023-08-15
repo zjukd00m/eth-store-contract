@@ -16,10 +16,8 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
 
     Counters.Counter private tokenIdCounter;
 
-    string public baseUri;
+    string public baseURI;
     uint256 public maxSupply;
-    // lockedUntil = 0 leaves the contract opened to transactions
-    // a non zero value means it's locked after the time specified by the timestamp
     uint256 public preMintPrice;
     uint256 public preMintStartDate;
     uint256 public preMintEndDate;
@@ -28,24 +26,28 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
 
     uint256 public publicMintPrice;
     uint256 public publicMintStartDate;
+    uint256 public maxCollectiblesPerWallet;
 
-    // mapping(uint256 => address) public tokenIdToOwner;
-    // mapping(address => uint256[]) public ownerToTokenIds;
+    bool public premintEnabled;
 
-    event PreMinted(address minter, uint256 itemId);
+    mapping(address => uint256[]) public ownerToTokenIds;
+
+    event PreMinted(address indexed minter, uint256 indexed itemId);
 
     constructor(
         string memory _name,
         string memory _symbol,
         string memory _baseUri,
         uint256 _maxSupply,
+        bool _premintEnabled,
         uint256 _preMintPrice,
         uint256 _preMintStartDate,
         uint256 _preMintEndDate,
         uint256 _maxPreMintCollectibles,
         uint256 _maxPreMintCollectiblesPerWallet,
         uint256 _publicMintPrice,
-        uint256 _publicMintStartDate
+        uint256 _publicMintStartDate,
+        uint256 _maxCollectiblesPerWallet
     ) ERC721(_name, _symbol) {
         require(
             _maxSupply > 0,
@@ -69,9 +71,18 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
 
         maxSupply = _maxSupply;
 
+        baseURI = _baseUri;
+
+        // Public mint settings
         publicMintStartDate = _publicMintStartDate;
 
         publicMintPrice = _publicMintPrice;
+
+        if (_maxCollectiblesPerWallet > 0)
+            maxCollectiblesPerWallet = _maxCollectiblesPerWallet;
+
+        // Pre-mint settings
+        if (premintEnabled) premintEnabled = _premintEnabled;
 
         if (_preMintPrice > 0) preMintPrice = _preMintPrice;
 
@@ -86,18 +97,35 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
             maxPreMintCollectiblesPerWallet = _maxPreMintCollectiblesPerWallet;
     }
 
-    // Users are added into a whitelist to mint the items before the public:w
+    function setBaseURI(string memory _baseUri) external onlyOwner {
+        baseURI = _baseUri;
+    }
+
+    function enablePremint(bool _premintEnabled) external onlyOwner {
+        require(
+            totalSupply() < maxSupply && block.timestamp <= preMintStartDate,
+            "Unable to set the premint for this collectible"
+        );
+
+        premintEnabled = _premintEnabled;
+    }
 
     function premint(
         string memory tokenUri
     ) external payable returns (uint256) {
-        tokenIdCounter.increment();
-
-        uint256 tokenId = tokenIdCounter.current();
+        require(
+            premintEnabled == true,
+            "Premint is not enabled for this collectible"
+        );
 
         require(
-            tokenId <= maxPreMintCollectibles,
+            totalSupply() < maxPreMintCollectibles,
             "The pre-mint items are sold out"
+        );
+
+        require(
+            block.timestamp >= preMintStartDate,
+            "The pre-mint sale hasn't started yet"
         );
 
         require(block.timestamp <= preMintEndDate, "The pre-mint sale is over");
@@ -109,17 +137,16 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
             "Maximum collectibles pre-minted by wallet"
         );
 
-        // Push the token to the caller's array of ids
-        // ownerToTokenIds[msg.sender].push(tokenId);
+        tokenIdCounter.increment();
 
-        // Associate the tokenId to the caller
-        // tokenIdToOwner[tokenId] = msg.sender;
+        uint256 tokenId = tokenIdCounter.current();
+
+        _safeMint(msg.sender, tokenId);
+        _setTokenURI(tokenId, tokenUri);
+
+        ownerToTokenIds[msg.sender].push(tokenId);
 
         emit PreMinted(msg.sender, tokenId);
-
-        // Mint the token and then set the token URI image
-        _setTokenURI(tokenId, tokenUri);
-        _safeMint(msg.sender, tokenId);
 
         return tokenId;
     }
@@ -127,13 +154,19 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
     function publicMint(
         string memory tokenUri
     ) external payable returns (uint256) {
-        // Users can mint after the public mint date
-        require(
-            block.timestamp >= publicMintStartDate,
-            "The collectibles are not available at public sale for now"
-        );
+        if (publicMintStartDate > 0)
+            require(
+                block.timestamp >= publicMintStartDate,
+                "The collectibles are not available at public sale for now"
+            );
 
-        require(totalSupply() <= maxSupply, "No more collectibles to mint");
+        require(totalSupply() < maxSupply, "No more collectibles to mint");
+
+        if (maxCollectiblesPerWallet > 0)
+            require(
+                balanceOf(msg.sender) <= maxCollectiblesPerWallet,
+                "Maximum collectibles per wallet minted"
+            );
 
         require(msg.value >= publicMintPrice, "Not enought funds");
 
@@ -141,21 +174,22 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
 
         uint256 tokenId = tokenIdCounter.current();
 
-        // tokenIdToOwner[tokenId] = msg.sender;
-
-        // ownerToTokenIds[msg.sender].push(tokenId);
-
-        _setTokenURI(tokenId, tokenUri);
         _safeMint(msg.sender, tokenId);
+        _setTokenURI(tokenId, tokenUri);
+
+        ownerToTokenIds[msg.sender].push(tokenId);
 
         return tokenId;
     }
 
-    // Function overrides
     function _burn(
         uint256 tokenId
     ) internal override(ERC721, ERC721URIStorage) {
         super._burn(tokenId);
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
     }
 
     function tokenURI(
