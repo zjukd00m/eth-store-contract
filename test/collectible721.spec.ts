@@ -1,45 +1,57 @@
 import { ethers } from "hardhat";
 import { expect } from "chai";
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+import { PromiseOrValue } from "../typechain-types/common";
 
 const publicMintStartDate = new Date();
 publicMintStartDate.setMinutes(publicMintStartDate.getMinutes() + 10);
 
-const contractData = {
-    collectibleName: "Fight Club",
-    collectibleSymbol: "FCUB",
+interface ContractDeployData {
+    name: string;
+    symbol: string;
+    baseUri: string;
+    collectiblePrices: [PromiseOrValue<string>, PromiseOrValue<string>];
+    preMintDates: [PromiseOrValue<number>, PromiseOrValue<number>];
+    maxMintCollectiblesPerWallet: [PromiseOrValue<number>, PromiseOrValue<number>];
+    maxPreMintCollectibles: number,
+    maxSupply: number;
+    publicMintStartDate: number;
+};
+
+const contractData: ContractDeployData = {
+    name: "The Fight Club",
+    symbol: "TFCB",
     baseUri: "ipfs://QmYmQ6L2i3WxQ5Zk2LhNX7fDgJYgRy3XTDHWdqRkzVX7dF/",
-    maxSupply: 10,
-    preMintPrice: 0,
-    preMintStartDate: 0,
-    preMintEndDate: 0,
-    maxPreMintCollectibles: 0,
-    maxPreMintCollectiblesPerWallet: 0,
-    publicMintPrice: BigInt("500000000000000000"),
+    collectiblePrices: [
+        ethers.utils.parseEther("0").toString(),
+        ethers.utils.parseEther("0.05").toString(),
+    ],
+    preMintDates: [0, 0],
+    maxMintCollectiblesPerWallet: [5, 5],
+    maxPreMintCollectibles: 8,
+    maxSupply: 20,
     publicMintStartDate: Math.floor(publicMintStartDate.getTime() / 1000),
-    maxCollectiblesPerWallet: 10,
 }
+
 
 describe("Collectible721 testing", () => {
     async function deployContractFixture() {
 
 
-        const [owner, addr1] = await ethers.getSigners();
+        const [owner, addr1, ...addrs] = await ethers.getSigners();
 
         const Collectible721 = await ethers.getContractFactory("Collectible721");
 
         const contract = await Collectible721.connect(owner).deploy(
-            contractData.collectibleName,
-            contractData.collectibleSymbol,
+            contractData.name,
+            contractData.symbol,
             contractData.baseUri,
-            contractData.maxSupply,
-            contractData.preMintPrice,
-            contractData.preMintStartDate,
-            contractData.preMintEndDate,
+            contractData.collectiblePrices,
+            contractData.preMintDates,
+            contractData.maxMintCollectiblesPerWallet,
             contractData.maxPreMintCollectibles,
-            contractData.publicMintPrice,
+            contractData.maxSupply,
             contractData.publicMintStartDate,
-            [contractData.maxCollectiblesPerWallet, contractData.maxPreMintCollectiblesPerWallet]
         );
 
         await contract.deployed();
@@ -47,8 +59,17 @@ describe("Collectible721 testing", () => {
         return {
             contract,
             owner,
-            addr1
+            addr1,
+            addrs,
         }
+    }
+
+    async function forwardTimeFixture() {
+        const latestBlockNumber = await ethers.provider.getBlockNumber();
+        const latestBlock = await ethers.provider.getBlock(latestBlockNumber);
+
+        await ethers.provider.send("evm_setNextBlockTimestamp", [latestBlock.timestamp + 3600]);
+        await ethers.provider.send("evm_mine", []);
     }
 
     describe("Testing the smart contract", () => {
@@ -69,21 +90,22 @@ describe("Collectible721 testing", () => {
 
             // Pre-mint data
             await expect(contract.maxPreMintCollectibles()).to.eventually.equal(contractData.maxPreMintCollectibles);
-            await expect(contract.maxPreMintCollectiblesPerWallet()).to.eventually.equal(contractData.maxPreMintCollectiblesPerWallet);
-            await expect(contract.preMintStartDate()).to.eventually.equal(contractData.preMintStartDate);
-            await expect(contract.preMintEndDate()).to.eventually.equal(contractData.preMintEndDate);
-            await expect(contract.preMintPrice()).to.eventually.equal(contractData.preMintPrice)
+            await expect(contract.maxPreMintCollectiblesPerWallet()).to.eventually.equal(contractData.maxMintCollectiblesPerWallet[0]);
+            await expect(contract.preMintStartDate()).to.eventually.equal(contractData.preMintDates[0]);
+            await expect(contract.preMintEndDate()).to.eventually.equal(contractData.preMintDates[1]);
+            await expect(contract.preMintPrice()).to.eventually.equal(contractData.collectiblePrices[0]);
 
             // Public mint data
-            await expect(contract.publicMintPrice()).to.eventually.equal(contractData.publicMintPrice);
-            await expect(contract.publicMintStartDate()).to.eventually.equal(contractData.publicMintStartDate);
-            await expect(contract.totalSupply()).to.eventually.equals(0);
+            await expect(contract.publicMintPrice()).to.eventually.equal(contractData.collectiblePrices[1]);
+            await expect(contract.publicMintStartDate()).to.eventually.equal(contractData.publicMintStartDate);``
+            await expect(contract.totalSupply()).to.eventually.equal(0);
+
         });
 
         it("Should fail to pre-mint since the contract doesn't allows it", async () => {
             const { contract } = await loadFixture(deployContractFixture);
 
-            await expect(contract.premint())
+            await expect(contract.premint(1))
                 .to
                 .be
                 .revertedWith("Premint is not enabled for this collectible");
@@ -92,10 +114,89 @@ describe("Collectible721 testing", () => {
         it("Should fail to mint before the public mint date", async () => {
             const { contract } = await loadFixture(deployContractFixture);
 
-            await expect(contract.publicMint())
+            await expect(contract.publicMint(1))
                 .to
                 .be
                 .revertedWith("The collectibles are not available for public sale for now");
+        });
+
+        it("Should do the public mint after the public mint date has passed", async () => {
+            const { contract, owner } = await loadFixture(deployContractFixture);
+            await loadFixture(forwardTimeFixture);
+
+            const tx = await contract.publicMint(2, {
+                value: ethers.utils.parseEther("0.1"),
+            });
+
+            expect(tx).to.not.be.undefined;
+
+            // The total supply must be of one item for now
+            await expect(contract.totalSupply()).to.eventually.equal(2);
+
+            // The balance of the owner must be of one token
+            await expect(contract.balanceOf(owner.address)).to.eventually.equal(2);
+
+            // The token with id 1 must belong to the owner
+            await expect(contract.ownerOf(2)).to.eventually.equal(owner.address);
+
+            // The token URI must match the expect format (with json extension)
+            await expect(contract.tokenURI(2)).to.eventually.equal(contractData.baseUri + "2.json");
+        });
+
+        it("Shouldn't enable the public when the user has not enough funds", async () => {
+            const { contract } = await loadFixture(deployContractFixture);
+            await loadFixture(forwardTimeFixture);
+
+            await expect(contract.publicMint(2, {
+                value: ethers.utils.parseEther("0.05")
+            })).to.be.revertedWith("Not enough funds");
+        });
+
+        it("Shouldn't enable an user to mint more than 5 colletibles", async () => {
+            const { contract } = await loadFixture(deployContractFixture);
+            await loadFixture(forwardTimeFixture);
+            
+            await expect(contract.publicMint(6, {
+                value: ethers.utils.parseEther("0.4"),
+            })).to.revertedWith("Maximum collectibles per wallet minted");
+        });
+
+        it("Should fail to mint more than the maximum supplied collectibles", async () => {
+            const { contract, owner, addr1, addrs } = await loadFixture(deployContractFixture);
+            await loadFixture(forwardTimeFixture);
+
+            await contract.connect(owner).publicMint(5, {
+                value: ethers.utils.parseEther("2.5"),
+            });
+
+            await contract.connect(addr1).publicMint(5, {
+                value: ethers.utils.parseEther("2.5"),
+            });
+
+            await contract.connect(addrs[0]).publicMint(5, {
+                value: ethers.utils.parseEther("2.5"),
+            });
+
+            await contract.connect(addrs[1]).publicMint(5, {
+                value: ethers.utils.parseEther("2.5"),
+            });
+
+            await expect(contract.totalSupply()).to.eventually.equal(20);
+
+            await expect(ethers.provider.getBalance(contract.address)).to.eventually.equal(
+                ethers.utils.parseEther(`${20 * 0.5}`),
+            );
+
+            await expect(contract.withdraw(owner.address)
+                .then(() => 
+                    ethers.provider.getBalance(contract.address)
+                )
+                .then((contractBalance) => contractBalance)
+            ).to.eventually.equal(ethers.utils.parseEther("0"));
+
+            await expect(contract.connect(addrs[2]).publicMint(1, {
+                value: ethers.utils.parseEther("0.05"),
+            })).to.be.revertedWith("Sold Out");
         });
     });
 });

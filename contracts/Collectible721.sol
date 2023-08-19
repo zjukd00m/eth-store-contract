@@ -37,66 +37,80 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
         string memory _name,
         string memory _symbol,
         string memory _baseUri,
-        uint256 _maxSupply,
-        uint256 _preMintPrice,
-        uint256 _preMintStartDate,
-        uint256 _preMintEndDate,
+        uint256[2] memory _collectiblePrices,
+        uint256[2] memory _preMintDates,
+        uint256[2] memory _maxMintCollectiblesPerWallet,
         uint256 _maxPreMintCollectibles,
-        uint256 _publicMintPrice,
-        uint256 _publicMintStartDate,
-        uint256[2] memory _maxCollectibles
+        uint256 _maxSupply,
+        uint256 _publicMintStartDate
     ) ERC721(_name, _symbol) {
+        require(
+            _collectiblePrices.length == 2,
+            "_collectiblePrices variable must be of length 2"
+        );
+
+        require(
+            _maxMintCollectiblesPerWallet.length == 2,
+            "_maxMintCollectiblesPerWallet must be of length 2"
+        );
+
+        require(
+            bytes(_baseUri).length > 0,
+            "You must set the base URI for the tokens"
+        );
+
         require(
             _maxSupply > 0,
             "Max collectible supply must be greater than 0"
         );
 
         require(
-            _publicMintStartDate >= 0,
-            "You must set a public mint date for the collectibles to be sold"
+            _collectiblePrices[1] > 0,
+            "You must set the public mint collectible price"
         );
 
         require(
-            _publicMintPrice > 0,
-            "You must set an amount in WEI for the public mint price"
-        );
-
-        require(
-            bytes(_baseUri).length > 0,
-            "You must set the base Uri for the tokens"
+            _maxPreMintCollectibles > 0,
+            "You must set a limit for the pre-mint colletibles to be created"
         );
 
         maxSupply = _maxSupply;
 
         baseURI = _baseUri;
 
-        // Public mint settings
-        if (_maxCollectibles.length > 0 && _maxCollectibles[0] > 0)
-            maxCollectiblesPerWallet = _maxCollectibles[0];
+        publicMintPrice = _collectiblePrices[1];
 
-        publicMintStartDate = _publicMintStartDate;
+        maxPreMintCollectibles = _maxPreMintCollectibles;
 
-        publicMintPrice = _publicMintPrice;
+        // Public mint start date may be as soon as the moment it's deployed
+        if (_publicMintStartDate > 0)
+            publicMintStartDate = _publicMintStartDate;
 
-        // Pre-mint settings
-        if (_maxCollectibles.length > 0 && _maxCollectibles[1] > 0)
-            maxPreMintCollectiblesPerWallet = _maxCollectibles[1];
+        // If the pre-mint items will have a price (on pre-mint enables)
+        if (_collectiblePrices[0] > 0) preMintPrice = _collectiblePrices[0];
 
-        if (_preMintPrice > 0) preMintPrice = _preMintPrice;
+        // Start and end dates of the pre-mint
+        if (
+            _preMintDates.length == 2 &&
+            _preMintDates[0] > 0 &&
+            _preMintDates[1] > 0
+        ) {
+            preMintStartDate = _preMintDates[0];
+            preMintEndDate = _preMintDates[1];
+        }
 
-        if (_preMintStartDate > 0) preMintStartDate = _preMintStartDate;
+        if (_maxMintCollectiblesPerWallet[0] > 0)
+            maxPreMintCollectiblesPerWallet = _maxMintCollectiblesPerWallet[0];
 
-        if (_preMintEndDate > 0) preMintEndDate = _preMintEndDate;
-
-        if (_maxPreMintCollectibles > 0)
-            maxPreMintCollectibles = _maxPreMintCollectibles;
+        if (_maxMintCollectiblesPerWallet[1] > 0)
+            maxCollectiblesPerWallet = _maxMintCollectiblesPerWallet[1];
     }
 
     function setBaseURI(string memory _baseUri) external onlyOwner {
         baseURI = _baseUri;
     }
 
-    function premint() external payable returns (uint256) {
+    function premint(uint8 _amount) external payable {
         require(
             preMintPrice > 0,
             "Premint is not enabled for this collectible"
@@ -107,67 +121,70 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
             "The pre-mint sale hasn't started yet"
         );
 
+        require(_amount > 0, "Can't mint 0 collectibles");
+
         require(
-            totalSupply() < maxPreMintCollectibles,
+            totalSupply() + _amount <= maxPreMintCollectibles,
             "The pre-mint items are sold out"
         );
 
         require(block.timestamp <= preMintEndDate, "The pre-mint sale is over");
 
-        require(msg.value >= preMintPrice, "Not enough funds");
+        require(msg.value >= _amount * preMintPrice, "Not enough funds");
 
         if (maxPreMintCollectiblesPerWallet > 0)
             require(
-                balanceOf(msg.sender) < maxPreMintCollectiblesPerWallet,
+                balanceOf(msg.sender) + _amount <
+                    maxPreMintCollectiblesPerWallet,
                 "Maximum collectibles pre-minted by wallet"
             );
 
-        tokenIdCounter.increment();
+        for (uint8 i = 0; i < _amount; i++) {
+            tokenIdCounter.increment();
 
-        uint256 tokenId = tokenIdCounter.current();
+            uint256 tokenId = tokenIdCounter.current();
 
-        string memory tokenUri = makeTokenURI(tokenId);
+            string memory tokenUri = makeTokenURI(tokenId);
 
-        _safeMint(msg.sender, tokenId);
+            _safeMint(msg.sender, tokenId);
 
-        _setTokenURI(tokenId, tokenUri);
+            _setTokenURI(tokenId, tokenUri);
 
-        ownerToTokenIds[msg.sender].push(tokenId);
+            ownerToTokenIds[msg.sender].push(tokenId);
 
-        emit PreMinted(msg.sender, tokenId);
-
-        return tokenId;
+            emit PreMinted(msg.sender, tokenId);
+        }
     }
 
-    function publicMint() external payable returns (uint256) {
+    function publicMint(uint8 _amount) external payable {
         if (publicMintStartDate > 0)
             require(
                 block.timestamp >= publicMintStartDate,
                 "The collectibles are not available for public sale for now"
             );
 
-        require(totalSupply() < maxSupply, "No more collectibles to mint");
+        require(totalSupply() + _amount <= maxSupply, "Sold Out");
 
         if (maxCollectiblesPerWallet > 0)
             require(
-                balanceOf(msg.sender) <= maxCollectiblesPerWallet,
+                balanceOf(msg.sender) + _amount <= maxCollectiblesPerWallet,
                 "Maximum collectibles per wallet minted"
             );
 
-        require(msg.value >= publicMintPrice, "Not enought funds");
+        require(msg.value >= _amount * publicMintPrice, "Not enough funds");
 
-        tokenIdCounter.increment();
+        for (uint8 i = 0; i < _amount; i++) {
+            tokenIdCounter.increment();
 
-        uint256 tokenId = tokenIdCounter.current();
+            uint256 tokenId = tokenIdCounter.current();
 
-        string memory tokenUri = makeTokenURI(tokenId);
+            string memory tokenUri = makeTokenURI(tokenId);
 
-        _safeMint(msg.sender, tokenId);
-        _setTokenURI(tokenId, tokenUri);
+            _safeMint(msg.sender, tokenId);
+            _setTokenURI(tokenId, tokenUri);
 
-        ownerToTokenIds[msg.sender].push(tokenId);
-
-        return tokenId;
+            ownerToTokenIds[msg.sender].push(tokenId);
+        }
     }
 
     function makeTokenURI(
@@ -175,10 +192,7 @@ contract Collectible721 is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable {
     ) private view returns (string memory) {
         require(bytes(_baseURI()).length > 0, "The base URI is not set");
 
-        return
-            string(
-                abi.encodePacked(_baseURI(), Strings.toString(tokenId), ".json")
-            );
+        return string(abi.encodePacked(Strings.toString(tokenId), ".json"));
     }
 
     function _burn(
