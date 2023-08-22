@@ -2,7 +2,12 @@
   "name": "hardhat-project",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^2.0.2",
-    "hardhat": "^2.16.1"
+    "@types/chai": "^4.3.5",
+    "@types/chai-as-promised": "^7.1.5",
+    "chai": "^4.3.7",
+    "chai-as-promised": "^7.1.1",
+    "hardhat": "^2.16.1",
+    "prettier": "^3.0.2"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.3"
